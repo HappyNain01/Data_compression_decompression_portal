@@ -2,8 +2,6 @@
 
 A comprehensive web application that allows users to upload files and apply various data compression algorithms (Huffman Coding, Run-Length Encoding, LZ77) to reduce file size, as well as decompress previously compressed files. The system demonstrates the efficiency of different algorithms by providing compression ratios and allows users to download the processed files.
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-Visit%20Site-blue)](https://compression-portal.vercel.app)
-[![GitHub](https://img.shields.io/badge/GitHub-Repository-green)](https://github.com/yourusername/compression-portal)
 
 ## Features
 
