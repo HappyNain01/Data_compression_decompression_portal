@@ -8,14 +8,23 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // CORS Configuration - Allow your frontend domain
-app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'https://data-compression-decompression-portal-awsi-emzkkpw5r.vercel.app',
-    'https://*.vercel.app'
-  ],
+const corsOptions = {
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'https://data-compression-decompression-port-liart.vercel.app'
+    ];
+    const vercelRegex = /^https:\/\/[a-z0-9-]+\.vercel\.app$/;
+    
+    if (!origin || allowedOrigins.includes(origin) || vercelRegex.test(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true
-}));
+};
+
+app.use(cors(corsOptions));
 
 // Basic middleware BEFORE file upload middleware
 app.use(express.json());
@@ -213,8 +222,9 @@ app.use('*', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Data Compression Server running on port ${PORT}`);
   console.log(`📁 Upload directory: ${uploadsDir}`);
   console.log(`🌐 CORS enabled for development and production`);
 });
+
