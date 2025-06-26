@@ -3,6 +3,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
+const helmet = require('helmet');
+app.use(helmet());
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
