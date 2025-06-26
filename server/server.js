@@ -1,104 +1,125 @@
 const express = require('express');
 const multer = require('multer');
-const cors = require('cors');
-const fs = require('fs');
 const path = require('path');
-const huffman = require('./algorithms/huffman');
-const rle = require('./algorithms/rle');
-const lz77 = require('./algorithms/lz77');
+const fs = require('fs');
+const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "*"
+  origin: ['http://localhost:3000', 'https://data-compression-decompression-portal-awsi-emzkkpw5r.vercel.app'],
+  credentials: true
 }));
-
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../client/build')));
+app.use(express.urlencoded({ extended: true }));
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/');
+    cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
+    const uniqueName = `${Date.now()}-${file.originalname}`;
+    cb(null, uniqueName);
   }
 });
 
 const upload = multer({
-  limits: { fileSize: parseInt(process.env.UPLOAD_LIMIT) || 10 * 1024 * 1024 }
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept all file types
+    cb(null, true);
+  }
 });
 
-// Process file endpoint
-app.post('/api/process', upload.single('file'), (req, res) => {
-  const { algorithm, mode } = req.body;
-  const inputPath = req.file.path;
-  const originalSize = req.file.size;
+// Import compression algorithms
+const huffman = require('./algorithms/huffman');
+const rle = require('./algorithms/rle');
+const lz77 = require('./algorithms/lz77');
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', message: 'Server is running' });
+});
+
+// API info endpoint
+app.get('/api', (req, res) => {
+  res.json({
+    message: 'Data Compression Portal API',
+    version: '1.0.0',
+    endpoints: [
+      'POST /api/process - Process files',
+      'GET /api/download/:filename - Download files',
+      'GET /health - Health check'
+    ]
+  });
+});
+
+// Main processing endpoint
+app.post('/api/process', upload.single('file'), async (req, res) => {
   try {
-    // Read file based on type
-    let inputData;
-    const fileExtension = path.extname(req.file.originalname).toLowerCase();
-
-    // Handle different file types
-    if (['.txt', '.js', '.html', '.css', '.json'].includes(fileExtension)) {
-      inputData = fs.readFileSync(inputPath, 'utf-8');
-    } else {
-      inputData = fs.readFileSync(inputPath);
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const startTime = Date.now();
-    let outputData;
-    let processedSize;
+    const { algorithm, mode } = req.body;
+    
+    if (!algorithm || !mode) {
+      return res.status(400).json({ error: 'Algorithm and mode are required' });
+    }
 
+    const filePath = req.file.path;
+    const originalSize = req.file.size;
+    const startTime = Date.now();
+
+    let result;
+    
     // Process based on algorithm
-    switch(algorithm) {
+    switch (algorithm) {
       case 'huffman':
-        outputData = mode === 'compress' 
-          ? huffman.compress(inputData) 
-          : huffman.decompress(inputData);
+        result = mode === 'compress' ? 
+          await huffman.compress(filePath) : 
+          await huffman.decompress(filePath);
         break;
       case 'rle':
-        outputData = mode === 'compress' 
-          ? rle.compress(inputData) 
-          : rle.decompress(inputData);
+        result = mode === 'compress' ? 
+          await rle.compress(filePath) : 
+          await rle.decompress(filePath);
         break;
-      case 'lz77':
-        outputData = mode === 'compress' 
-          ? lz77.compress(inputData) 
-          : lz77.decompress(inputData);
+      case 'lz77':  
+        result = mode === 'compress' ? 
+          await lz77.compress(filePath) : 
+          await lz77.decompress(filePath);
         break;
       default:
-        throw new Error('Unknown algorithm');
+        return res.status(400).json({ error: 'Invalid algorithm' });
     }
 
-    const endTime = Date.now();
-    const processingTime = endTime - startTime;
-
-    // Save processed file
-    const outputFileName = `${mode}ed_${Date.now()}_${req.file.originalname}`;
-    const outputPath = path.join('uploads', outputFileName);
-
-    if (typeof outputData === 'string') {
-      fs.writeFileSync(outputPath, outputData, 'utf-8');
-      processedSize = Buffer.byteLength(outputData, 'utf-8');
-    } else {
-      fs.writeFileSync(outputPath, outputData);
-      processedSize = outputData.length;
-    }
-
+    const processingTime = Date.now() - startTime;
+    const processedSize = fs.statSync(result.outputPath).size;
+    
     // Calculate compression ratio
-    const compressionRatio = mode === 'compress' 
-      ? ((originalSize - processedSize) / originalSize * 100).toFixed(2)
-      : ((processedSize - originalSize) / originalSize * 100).toFixed(2);
+    const compressionRatio = mode === 'compress' ? 
+      ((originalSize - processedSize) / originalSize * 100).toFixed(2) :
+      ((processedSize - originalSize) / originalSize * 100).toFixed(2);
 
-    // Send response with statistics
+    // Clean up original file
+    fs.unlinkSync(filePath);
+
     res.json({
       success: true,
-      fileName: outputFileName,
+      fileName: path.basename(result.outputPath),
       stats: {
         originalSize,
         processedSize,
@@ -108,27 +129,23 @@ app.post('/api/process', upload.single('file'), (req, res) => {
       }
     });
 
-  } catch (err) {
-    console.error('Processing error:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Processing error: ' + err.message
-    });
-  } finally {
-    // Clean up uploaded file
-    if (fs.existsSync(inputPath)) {
-      fs.unlinkSync(inputPath);
-    }
+  } catch (error) {
+    console.error('Processing error:', error);
+    res.status(500).json({ error: 'Processing failed: ' + error.message });
   }
 });
 
-// Download processed file endpoint
+// Download endpoint
 app.get('/api/download/:filename', (req, res) => {
-  const filename = req.params.filename;
-  const filePath = path.join(__dirname, 'uploads', filename);
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(uploadsDir, filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
 
-  if (fs.existsSync(filePath)) {
-    res.download(filePath, filename, (err) => {
+    res.download(filePath, (err) => {
       if (err) {
         console.error('Download error:', err);
         res.status(500).json({ error: 'Download failed' });
@@ -138,76 +155,40 @@ app.get('/api/download/:filename', (req, res) => {
           if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
           }
-        }, 30000); // Delete after 30 seconds
+        }, 5000);
       }
     });
-  } else {
-    res.status(404).json({ error: 'File not found' });
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({ error: 'Download failed' });
   }
 });
 
-// Algorithm info endpoint
-app.get('/api/algorithms', (req, res) => {
-  const algorithms = {
-    huffman: {
-      name: "Huffman Coding",
-      description: "A lossless data compression algorithm that uses variable-length codes to represent characters. More frequent characters get shorter codes, while less frequent characters get longer codes.",
-      complexity: "O(n log n) time complexity",
-      bestFor: "Text files with non-uniform character distribution",
-      worstCase: "Files with uniform character distribution"
-    },
-    rle: {
-      name: "Run-Length Encoding",
-      description: "A simple compression algorithm that replaces sequences of the same data value (runs) with a single data value and count.",
-      complexity: "O(n) time complexity",
-      bestFor: "Files with long sequences of repeated data (images, simple graphics)",
-      worstCase: "Files with no repeated sequences"
-    },
-    lz77: {
-      name: "LZ77",
-      description: "A dictionary-based compression algorithm that uses a sliding window approach. It replaces repeated occurrences of data with references to a single copy.",
-      complexity: "O(n) to O(n²) time complexity",
-      bestFor: "General-purpose compression with good compression ratios",
-      worstCase: "Very small files or files with no repetition"
-    }
-  };
-
-  res.json(algorithms);
-});
-
-// Serve React app for all other routes (in production)
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
-  if (!req.file) {
-  return res.status(400).json({ error: "No file uploaded" });
-}
-
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Data Compression Portal API',
+    status: 'Running',
+    version: '1.0.0'
+  });
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        success: false,
-        error: 'File too large. Maximum size is 10MB.'
-      });
+      return res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
     }
   }
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error'
-  });
+  console.error('Server error:', error);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-app.use((err, req, res, next) => {
-  console.error("Unhandled Error:", err);
-  res.status(500).json({ error: "Internal server error" });
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Endpoint not found' });
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
-
-
